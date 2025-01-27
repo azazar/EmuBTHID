@@ -3,15 +3,30 @@ import dbus.service
 import os
 import socket
 import logging
+import resource
 from time import time
 
-# Configure logging
+# Configure logging with microsecond precision
 logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d [%(levelname)s] %(message)s',
+    format='%(asctime)s.%(msecs)06d [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S',
-    level=logging.INFO
+    level=getattr(logging, os.environ.get('LOGLEVEL', 'INFO'))
 )
 logger = logging.getLogger('bthid')
+
+
+def log_resource_usage():
+    """Log memory usage if it has changed significantly"""
+    usage = resource.getrusage(resource.RUSAGE_SELF)
+    current_mem = usage.ru_maxrss
+    if not hasattr(log_resource_usage, 'last_mem'):
+        log_resource_usage.last_mem = current_mem
+
+    # Log if memory usage has increased by more than 10%
+    if current_mem > log_resource_usage.last_mem * 1.1:
+        logger.warning('Memory usage increased to %d KB (was %d KB)',
+                       current_mem, log_resource_usage.last_mem)
+        log_resource_usage.last_mem = current_mem
 
 
 # Only log unique messages for these common events
@@ -66,17 +81,17 @@ class BluetoothHIDProfile(dbus.service.Object):
     @dbus.service.method("org.bluez.Profile1", in_signature="oha{sv}", out_signature="")
     def NewConnection(self, path, fd, properties):
         self.fd = fd.take()
-        logger.info("New Connection from (%s, %d)", path, self.fd)
+        logger.debug("New Connection from (%s, %d)", path, self.fd)
         for k, v in properties.items():
             if k == "Version" or k == "Features":
-                logger.info("    %s = 0x%04x", k, v)
+                logger.debug("    %s = 0x%04x", k, v)
             else:
-                logger.info("    %s = %s", k, v)
+                logger.debug("    %s = %s", k, v)
 
     @dbus.service.method("org.bluez.Profile1",
                          in_signature="o", out_signature="")
     def RequestDisconnection(self, path):
-        logger.info("RequestDisconnection(%s)", path)
+        logger.debug("RequestDisconnection(%s)", path)
 
         if (self.fd > 0):
             os.close(self.fd)
@@ -95,7 +110,10 @@ class BluetoothHIDService(object):
     def __init__(self, service_record, MAC):
         # Initialize state tracking
         self.overflow_count = 0
-        self.last_send_time = time()
+        self.events_sent = 0
+        self.last_stats_time = time()
+        self.last_overflow_time = 0
+        self.recovery_threshold = 0.1  # 100ms without overflow to consider recovered
         self.P_CTRL = 0x0011
         self.P_INTR = 0x0013
         self.SELFMAC = MAC
@@ -120,36 +138,49 @@ class BluetoothHIDService(object):
         sock_control.bind((self.SELFMAC, self.P_CTRL))
         sock_inter.bind((self.SELFMAC, self.P_INTR))
         manager.RegisterProfile(self.PROFILE_PATH, "00001124-0000-1000-8000-00805f9b34fb", opts)
-        logger.info("HID Profile registered")
+        logger.debug("HID Profile registered")
         sock_control.listen(1)
         sock_inter.listen(1)
         logger.info("Waiting for connection at controller %s (verify MAC in bluetoothctl)", MAC)
         self.ccontrol, cinfo = sock_control.accept()
-        logger.info("Control channel connected to %s", cinfo[self.HOST])
+        logger.debug("Control channel connected to %s", cinfo[self.HOST])
         self.cinter, cinfo = sock_inter.accept()
-        logger.info("Interrupt channel connected to %s", cinfo[self.HOST])
+        logger.debug("Interrupt channel connected to %s", cinfo[self.HOST])
 
     def send(self, bytes_buf):
+        """Send HID report with overflow detection"""
         try:
-            # Try to send with non-blocking socket
+            # Try non-blocking send
             self.cinter.setblocking(False)
+            send_start = time()
             bytes_sent = self.cinter.send(bytes_buf)
+            send_time = time() - send_start
 
+            current_time = time()
             if bytes_sent < len(bytes_buf):
                 self.overflow_count += 1
+                self.last_overflow_time = current_time
                 if self.overflow_count == 1:  # Only log first occurrence
                     logger.warning("Buffer overflow detected - some events may be delayed")
             else:
-                if self.overflow_count > 0:
-                    logger.info(f"Buffer recovered after {self.overflow_count} overflow events")
+                # Only consider buffer recovered after a period without overflow
+                if self.overflow_count > 0 and (current_time - self.last_overflow_time) > self.recovery_threshold:
+                    logger.debug(f"Buffer recovered after {self.overflow_count} overflow events")
                     self.overflow_count = 0
+                if send_time > 0.001:  # Log if send takes more than 1ms
+                    logger.warning("Slow send operation: %.3fms", send_time * 1000)
 
-            # Track successful send
-            self.last_send_time = time()
+            # Track successful send and update stats
+            self.events_sent += 1
+            if current_time - self.last_stats_time >= 1:
+                logger.debug("Events sent: %d", self.events_sent)
+                self.events_sent = 0
+                self.last_stats_time = current_time
 
         except socket.error as e:
             if e.errno == socket.EAGAIN or e.errno == socket.EWOULDBLOCK:
                 self.overflow_count += 1
+                self.last_overflow_time = current_time
                 if self.overflow_count == 1:
                     logger.warning("Send buffer full - some events may be delayed")
             else:

@@ -1,11 +1,12 @@
 #!/usr/bin/python3
 
 import sys
-from BluetoothHID import BluetoothHIDService, get_default_adapter_address
+from BluetoothHID import BluetoothHIDService, get_default_adapter_address, logger
 from evdev_xkb_map import evdev_xkb_map, modkeys
 import keymap
 from Xlib import X, display, Xutil
 from dbus.mainloop.glib import DBusGMainLoop
+from time import time
 
 usbhid_map = {}
 with open("keycode.txt") as f:
@@ -50,7 +51,6 @@ class Window(object):
         )
 
         # Set some WM info
-
         self.WM_DELETE_WINDOW = self.d.intern_atom('WM_DELETE_WINDOW')
         self.WM_PROTOCOLS = self.d.intern_atom('WM_PROTOCOLS')
 
@@ -68,13 +68,13 @@ class Window(object):
         self.window.map()
 
     def grab(self):
-        print("Grab!")
+        logger.debug("Input grabbed")
         self.window.grab_pointer(False, X.ButtonReleaseMask | X.ButtonPressMask | X.PointerMotionMask,
                                  X.GrabModeAsync, X.GrabModeAsync, self.window, X.NONE, X.CurrentTime)
         self.window.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
 
     def ungrab(self):
-        print("UnGrab!")
+        logger.debug("Input ungrabbed")
         self.d.ungrab_pointer(X.CurrentTime)
         self.d.ungrab_keyboard(X.CurrentTime)
 
@@ -110,21 +110,30 @@ class Window(object):
         hint_x = geometry.width // 5
         hint_y = geometry.height // 5
         hint_str = 'Press Ctrl+Alt+Shift+B to   Grab'.encode()
+        last_stats_time = time()
+        events_received = 0
         while 1:
+            # Monitor stats every second
+            current_time = time()
+            if current_time - last_stats_time >= 1:
+                pending = self.d.pending_events()
+                logger.debug("Events received/pending: %d/%d",
+                             events_received, pending)
+                events_received = 0
+                last_stats_time = current_time
+
             e = self.d.next_event()
+            events_received += 1
 
             # Window has been destroyed, quit
             if e.type == X.DestroyNotify:
-                print("Destroy")
+                logger.debug("Window destroyed")
                 sys.exit(0)
 
             if e.type == X.KeyPress:
                 usbhid_keycode = evdev_xkb_map[e.detail]
-                # print("key pressed: {}".format(usbhid_map[usbhid_keycode]))
                 if usbhid_keycode in modkeys:
                     kbd_state[2] |= modkeys[usbhid_keycode]
-                    # import ipdb
-                    # ipdb.set_trace()
                 else:
                     for i in range(4, 10):
                         if kbd_state[i] == 0x00:
@@ -133,14 +142,12 @@ class Window(object):
                 send_call_back(bytes(kbd_state))
                 if usbhid_keycode in grab_trigger:
                     grab_cnt -= 1
-                    print(grab_cnt)
                     if (grab_cnt == 0):
                         if grabbed:
                             self.ungrab()
                             grabbed = False
                             hint_str = 'Press Ctrl+Alt+Shift+B to   Grab'.encode()
                             self.window.image_text(self.gc, hint_x, hint_y, hint_str)
-
                         else:
                             self.grab()
                             grabbed = True
@@ -149,7 +156,6 @@ class Window(object):
 
             if e.type == X.KeyRelease:
                 usbhid_keycode = evdev_xkb_map[e.detail]
-                # print("key released: {}".format(usbhid_map[evdev_xkb_map[e.detail]]))
                 if usbhid_keycode in modkeys:
                     kbd_state[2] &= ~modkeys[usbhid_keycode]
                 else:
@@ -159,14 +165,13 @@ class Window(object):
                             break
                 if usbhid_keycode in grab_trigger:
                     grab_cnt += 1
-                    print(grab_cnt)
                 send_call_back(bytes(kbd_state))
 
             # Some part of the window has been exposed,
             # redraw all the objects.
             if e.type == X.Expose:
                 expose_count += 1
-                print("Exposed : {}".format(expose_count))
+                logger.debug("Window exposed")
                 geometry = self.window.get_geometry()
                 hint_x = geometry.width // 5
                 hint_y = geometry.height // 5
@@ -174,7 +179,6 @@ class Window(object):
 
             # Left button pressed, start to draw
             if e.type == X.ButtonPress:
-                # print("Button press: {}".format(e.detail))
                 if (e.detail <= 3):
                     mouse_state[2] |= 1 << (e.detail - 1)
                 send_call_back(bytes(mouse_state))
@@ -190,28 +194,38 @@ class Window(object):
                         sys.exit(0)
             if e.type == X.MotionNotify:
                 if prev_x is not None and prev_y is not None:
-                    # Accumulate mouse movement while there are more events pending
+                    # Start with current movement
                     total_x = e.event_x - prev_x
                     total_y = e.event_y - prev_y
+                    events_merged = 1
 
-                    # Check for additional motion events without sending
+                    # Check for additional motion events
                     while self.d.pending_events() > 0:
                         next_e = self.d.next_event()
                         if next_e.type == X.MotionNotify:
                             total_x += next_e.event_x - e.event_x
                             total_y += next_e.event_y - e.event_y
                             e = next_e
+                            events_merged += 1
                         else:
                             # Put non-motion event back in queue
                             self.d.put_back_event(next_e)
                             break
 
-                    # Convert accumulated movement to HID report
-                    pos_x = max(-128, min(int(total_x * 2), 127))
+                    # Scale movement based on number of events merged
+                    # This helps maintain responsiveness during high event rates
+                    scale = 2.0 if events_merged <= 2 else (1.0 + (1.0 / events_merged))
+                    pos_x = max(-128, min(int(total_x * scale), 127))
+                    pos_y = max(-128, min(int(total_y * scale), 127))
+
+                    # Update mouse state and send
                     mouse_state[3] = pos_x if pos_x >= 0 else (256 + pos_x)
-                    pos_y = max(-128, min(int(total_y * 2), 127))
                     mouse_state[4] = pos_y if pos_y >= 0 else (256 + pos_y)
                     send_call_back(bytes(mouse_state))
+
+                    if events_merged > 1:
+                        logger.debug("Merged %d mouse events, displacement: (%d,%d), scale: %.2f",
+                                     events_merged, pos_x, pos_y, scale)
                 if e.event_x == geometry.width - 1:
                     self.window.warp_pointer(1, e.event_y)
                     prev_x = 1
@@ -237,7 +251,7 @@ if __name__ == '__main__':
     d.change_keyboard_control(auto_repeat_mode=X.AutoRepeatModeOff)
     try:
         controller_mac = get_default_adapter_address()
-        print(f"Using detected Bluetooth controller: {controller_mac}")
+        logger.info("Using Bluetooth controller: %s", controller_mac)
         bthid_srv = BluetoothHIDService(service_record, controller_mac)
         Window(d).loop(bthid_srv.send)
     finally:
@@ -245,4 +259,4 @@ if __name__ == '__main__':
         d.get_keyboard_control()
         d.ungrab_keyboard(X.CurrentTime)
         d.ungrab_pointer(X.CurrentTime)
-        print("Exit")
+        logger.debug("Exit")
