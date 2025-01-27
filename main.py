@@ -1,16 +1,11 @@
 #!/usr/bin/python3
 
 import sys
-from BluetoothHID import BluetoothHIDService
+from BluetoothHID import BluetoothHIDService, get_default_adapter_address
 from evdev_xkb_map import evdev_xkb_map, modkeys
 import keymap
 from Xlib import X, display, Xutil
 from dbus.mainloop.glib import DBusGMainLoop
-
-"""
-Change this CONTROLLER_MAC to the mac of your own device
-"""
-CONTROLLER_MAC = "00:26:83:3A:96:37"
 
 usbhid_map = {}
 with open("keycode.txt") as f:
@@ -224,7 +219,9 @@ if __name__ == '__main__':
     d = display.Display()
     d.change_keyboard_control(auto_repeat_mode=X.AutoRepeatModeOff)
     try:
-        bthid_srv = BluetoothHIDService(service_record, CONTROLLER_MAC)
+        controller_mac = get_default_adapter_address()
+        print(f"Using detected Bluetooth controller: {controller_mac}")
+        bthid_srv = BluetoothHIDService(service_record, controller_mac)
         Window(d).loop(bthid_srv.send)
     finally:
         d.change_keyboard_control(auto_repeat_mode=X.AutoRepeatModeOn)

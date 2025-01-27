@@ -4,6 +4,23 @@ import os
 import socket
 
 
+def get_default_adapter_address():
+    """Get the MAC address of the default Bluetooth adapter"""
+    bus = dbus.SystemBus()
+    manager = dbus.Interface(bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager")
+    objects = manager.GetManagedObjects()
+    
+    for path, interfaces in objects.items():
+        if "org.bluez.Adapter1" not in interfaces:
+            continue
+        adapter = dbus.Interface(bus.get_object("org.bluez", path), "org.bluez.Adapter1")
+        properties = dbus.Interface(adapter, "org.freedesktop.DBus.Properties")
+        address = properties.Get("org.bluez.Adapter1", "Address")
+        return address
+    
+    raise RuntimeError("No Bluetooth adapter found")
+
+
 class BluetoothHIDProfile(dbus.service.Object):
     def __init__(self, bus, path):
         super(BluetoothHIDProfile, self).__init__(bus, path)
