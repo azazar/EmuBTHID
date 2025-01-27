@@ -190,9 +190,26 @@ class Window(object):
                         sys.exit(0)
             if e.type == X.MotionNotify:
                 if prev_x is not None and prev_y is not None:
-                    pos_x = max(-128, min(int((e.event_x - prev_x) * 2), 127))
+                    # Accumulate mouse movement while there are more events pending
+                    total_x = e.event_x - prev_x
+                    total_y = e.event_y - prev_y
+
+                    # Check for additional motion events without sending
+                    while self.d.pending_events() > 0:
+                        next_e = self.d.next_event()
+                        if next_e.type == X.MotionNotify:
+                            total_x += next_e.event_x - e.event_x
+                            total_y += next_e.event_y - e.event_y
+                            e = next_e
+                        else:
+                            # Put non-motion event back in queue
+                            self.d.put_back_event(next_e)
+                            break
+
+                    # Convert accumulated movement to HID report
+                    pos_x = max(-128, min(int(total_x * 2), 127))
                     mouse_state[3] = pos_x if pos_x >= 0 else (256 + pos_x)
-                    pos_y = max(-128, min(int((e.event_y - prev_y) * 2), 127))
+                    pos_y = max(-128, min(int(total_y * 2), 127))
                     mouse_state[4] = pos_y if pos_y >= 0 else (256 + pos_y)
                     send_call_back(bytes(mouse_state))
                 if e.event_x == geometry.width - 1:
