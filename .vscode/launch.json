@@ -8,10 +8,9 @@
             "program": "${workspaceFolder}/main.py",
             "sudo": true,
             "console": "integratedTerminal",
-            "justMyCode": false,
+            "justMyCode": true,
             "env": {
-                "DISPLAY": ":0",
-                "PYTHONPATH": "${workspaceFolder}"
+                "LOGLEVEL": "DEBUG"
             }
         },
     ]
