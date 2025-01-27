@@ -1,8 +1,6 @@
 #!/usr/bin/python3
 
 import sys
-import os
-import time
 from BluetoothHID import BluetoothHIDService
 from evdev_xkb_map import evdev_xkb_map, modkeys
 import keymap
@@ -18,9 +16,9 @@ usbhid_map = {}
 with open("keycode.txt") as f:
     for line in f.read().splitlines():
         if not line.startswith(";") and len(line) > 1:
-            l = line.split(maxsplit=1)
-            usbhid_keycode = int(l[0])
-            usbhid_keyname = l[1]
+            row = line.split(maxsplit=1)
+            usbhid_keycode = int(row[0])
+            usbhid_keyname = row[1]
             usbhid_map[usbhid_keycode] = usbhid_keyname
 
 
@@ -45,9 +43,9 @@ class Window(object):
                         X.StructureNotifyMask |
                         X.ButtonPressMask |
                         X.ButtonReleaseMask |
-                        X.Button1MotionMask) |
-                       X.KeyPressMask |
-                       X.KeyReleaseMask,
+                        X.Button1MotionMask |
+                        X.KeyPressMask |
+                        X.KeyReleaseMask),
             colormap=X.CopyFromParent,
         )
 
@@ -76,9 +74,9 @@ class Window(object):
 
     def grab(self):
         print("Grab!")
-        ret = self.window.grab_pointer(False, X.ButtonReleaseMask | X.ButtonPressMask | X.PointerMotionMask,
-                                       X.GrabModeAsync, X.GrabModeAsync, self.window, X.NONE, X.CurrentTime)
-        ret = self.window.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+        self.window.grab_pointer(False, X.ButtonReleaseMask | X.ButtonPressMask | X.PointerMotionMask,
+                                 X.GrabModeAsync, X.GrabModeAsync, self.window, X.NONE, X.CurrentTime)
+        self.window.grab_keyboard(False, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
 
     def ungrab(self):
         print("UnGrab!")
@@ -187,7 +185,6 @@ class Window(object):
                 send_call_back(bytes(mouse_state))
 
             if e.type == X.ButtonRelease:
-                # print("Button release: {}".format(e.detail))
                 mouse_state[2] &= ~(1 << (e.detail - 1))
                 send_call_back(bytes(mouse_state))
 
@@ -197,13 +194,11 @@ class Window(object):
                     if fmt == 32 and data[0] == self.WM_DELETE_WINDOW:
                         sys.exit(0)
             if e.type == X.MotionNotify:
-                #print("Motion: ({x},{y})".format(x=e.event_x, y=e.event_y))
                 if prev_x is not None and prev_y is not None:
                     pos_x = max(-128, min(int((e.event_x - prev_x) * 2), 127))
                     mouse_state[3] = pos_x if pos_x >= 0 else (256 + pos_x)
                     pos_y = max(-128, min(int((e.event_y - prev_y) * 2), 127))
                     mouse_state[4] = pos_y if pos_y >= 0 else (256 + pos_y)
-                    #print("    ({},{})".format(mouse_state[3], mouse_state[4]))
                     send_call_back(bytes(mouse_state))
                 if e.event_x == geometry.width - 1:
                     self.window.warp_pointer(1, e.event_y)
@@ -222,6 +217,7 @@ class Window(object):
                 else:
                     prev_y = e.event_y
 
+
 if __name__ == '__main__':
     DBusGMainLoop(set_as_default=True)
     service_record = open("sdp_record_kbd.xml").read()
@@ -230,7 +226,6 @@ if __name__ == '__main__':
     try:
         bthid_srv = BluetoothHIDService(service_record, CONTROLLER_MAC)
         Window(d).loop(bthid_srv.send)
-        #Window(d).loop(print)
     finally:
         d.change_keyboard_control(auto_repeat_mode=X.AutoRepeatModeOn)
         d.get_keyboard_control()
