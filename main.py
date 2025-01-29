@@ -10,13 +10,13 @@ from BluetoothHID import logger
 from tray_ui import TrayUI
 from device_manager import DeviceManager
 from keyboard_manager import KeyboardManager
-from mouse_handler import MouseHandler
+from input.mouse_manager import MouseManager
 
-# Constants
-ICON_SIZE = 24
-ICON_FONT_SIZE = 20
-DEVICE_SCAN_INTERVAL = 5000  # milliseconds
-EVENT_CHECK_INTERVAL = 10    # milliseconds
+from constants.input_constants import (
+    ICON_SIZE,
+    DEVICE_SCAN_INTERVAL,
+    EVENT_CHECK_INTERVAL
+)
 
 
 def create_text_icon(text: str, color: QColor = QColor("#808080"), size: int = ICON_SIZE) -> QIcon:
@@ -27,7 +27,7 @@ def create_text_icon(text: str, color: QColor = QColor("#808080"), size: int = I
     painter = QPainter(pixmap)
     painter.setPen(color)
     font = QFont()
-    font.setPointSize(size - 4)
+    font.setPointSize(int(size * 0.8))  # Set font size to 80% of icon size
     painter.setFont(font)
 
     # Draw text centered
@@ -55,7 +55,7 @@ class BTHIDTrayApp:
         self.tray_ui = TrayUI(create_text_icon)
         self.device_mgr = DeviceManager()
         self.keyboard_mgr = KeyboardManager(self.display, self.root)
-        self.mouse_handler = None
+        self.mouse_manager = None
 
         # Setup UI
         self.tray_ui.add_exit_action(self.cleanup_and_exit)
@@ -108,9 +108,9 @@ class BTHIDTrayApp:
         if self.device_mgr.connect_device(device_mac):
             # Start input handling
             if self.keyboard_mgr.start_input_grab(self.device_mgr.bthid_srv):
-                # Start mouse handler
-                self.mouse_handler = MouseHandler(self.device_mgr.bthid_srv)
-                self.mouse_handler.start()
+                # Start mouse manager
+                self.mouse_manager = MouseManager(self.device_mgr.bthid_srv)
+                self.mouse_manager.start()
 
                 # Update UI
                 self.scan_devices()
@@ -126,9 +126,9 @@ class BTHIDTrayApp:
         """
         # Stop input handlers
         self.keyboard_mgr.stop_input_grab()
-        if self.mouse_handler:
-            self.mouse_handler.stop()
-            self.mouse_handler = None
+        if self.mouse_manager:
+            self.mouse_manager.stop()
+            self.mouse_manager = None
 
         # Disconnect device
         self.device_mgr.disconnect_device()
