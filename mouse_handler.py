@@ -11,7 +11,6 @@ from evdev.device import InputDevice
 from BluetoothHID import logger, BluetoothHIDService
 
 from config import (
-    MOTION_UPDATE_THRESHOLD,
     STATS_INTERVAL,
     RECOVERY_DELAY
 )
@@ -258,10 +257,6 @@ class MouseHandler:
         Main event loop for mouse handling.
         Monitors events from all movement and button devices.
         """
-        total_x = 0
-        total_y = 0
-        last_motion_time = time.time()
-
         while self.running:
             try:
                 # Process events from all devices
@@ -269,13 +264,18 @@ class MouseHandler:
                     try:
                         for event in device.read():
                             if event.type == evdev.ecodes.EV_REL:  # Mouse movement
+                                x_motion = 0
+                                y_motion = 0
                                 if event.code == evdev.ecodes.REL_X:
-                                    # Clamp individual motion values before accumulating
-                                    total_x += max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
-                                    last_motion_time = time.time()
+                                    # Clamp motion value
+                                    x_motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
+                                    self.bthid_srv.handle_mouse_motion(x_motion, 0)
+                                    self.mouse_events += 1
                                 elif event.code == evdev.ecodes.REL_Y:
-                                    total_y += max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
-                                    last_motion_time = time.time()
+                                    # Clamp motion value
+                                    y_motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
+                                    self.bthid_srv.handle_mouse_motion(0, y_motion)
+                                    self.mouse_events += 1
                             elif event.type == evdev.ecodes.EV_KEY:
                                 # Map button codes to 1-based indices
                                 button_map = {
@@ -305,27 +305,13 @@ class MouseHandler:
                         logger.error(f"Error reading from device {device.name}: {e}")
                         continue
 
-                # Send accumulated motion if any
-                current_time = time.time()
-                if (total_x != 0 or total_y != 0) and current_time - last_motion_time > MOTION_UPDATE_THRESHOLD:
-                    # Clamp accumulated values before sending
-                    total_x = max(MOUSE_MIN_MOTION, min(total_x, MOUSE_MAX_MOTION))
-                    total_y = max(MOUSE_MIN_MOTION, min(total_y, MOUSE_MAX_MOTION))
-                    self.bthid_srv.handle_mouse_motion(total_x, total_y)
-                    total_x = 0
-                    total_y = 0
-                    self.mouse_events += 1
-                    last_motion_time = current_time
-
                 # Log stats if needed
+                current_time = time.time()
                 if current_time - self.last_stats_time >= STATS_INTERVAL and self.mouse_events > 0:
                     events_per_sec = self.mouse_events / STATS_INTERVAL
                     logger.info(f"Mouse events per second: {events_per_sec:.1f}")
                     self.mouse_events = 0
                     self.last_stats_time = current_time
-
-                # Small sleep to prevent busy loop
-                time.sleep(0.001)
 
             except Exception as e:
                 logger.error(f"Error in mouse event loop: {e}")
