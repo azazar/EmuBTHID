@@ -74,7 +74,7 @@ class MouseHandler:
 
                 # Check for button capabilities
                 if ('EV_KEY', evdev.ecodes.EV_KEY) in capabilities:
-                    key_caps = capabilities[('EV_KEY', evdev.ecodes.EV_KEY)] 
+                    key_caps = capabilities[('EV_KEY', evdev.ecodes.EV_KEY)]
                     key_names = []
                     for cap in key_caps:
                         if isinstance(cap[0], (list, tuple)):
@@ -257,6 +257,9 @@ class MouseHandler:
         Main event loop for mouse handling.
         Monitors events from all movement and button devices.
         """
+        accumulated_x = 0
+        accumulated_y = 0
+
         while self.running:
             try:
                 # Process events from all devices
@@ -264,19 +267,25 @@ class MouseHandler:
                     try:
                         for event in device.read():
                             if event.type == evdev.ecodes.EV_REL:  # Mouse movement
-                                x_motion = 0
-                                y_motion = 0
                                 if event.code == evdev.ecodes.REL_X:
                                     # Clamp motion value
-                                    x_motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
-                                    self.bthid_srv.handle_mouse_motion(x_motion, 0)
-                                    self.mouse_events += 1
+                                    motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
+                                    accumulated_x += motion
                                 elif event.code == evdev.ecodes.REL_Y:
                                     # Clamp motion value
-                                    y_motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
-                                    self.bthid_srv.handle_mouse_motion(0, y_motion)
-                                    self.mouse_events += 1
-                            elif event.type == evdev.ecodes.EV_KEY:
+                                    motion = max(MOUSE_MIN_MOTION, min(event.value, MOUSE_MAX_MOTION))
+                                    accumulated_y += motion
+                            # Send accumulated motion on non-movement events or end of batch
+                            if event.type != evdev.ecodes.EV_REL and (accumulated_x != 0 or accumulated_y != 0):
+                                # Clamp accumulated values
+                                final_x = max(MOUSE_MIN_MOTION, min(accumulated_x, MOUSE_MAX_MOTION))
+                                final_y = max(MOUSE_MIN_MOTION, min(accumulated_y, MOUSE_MAX_MOTION))
+                                self.bthid_srv.handle_mouse_motion(final_x, final_y)
+                                accumulated_x = 0
+                                accumulated_y = 0
+                                self.mouse_events += 1
+
+                            if event.type == evdev.ecodes.EV_KEY:
                                 # Map button codes to 1-based indices
                                 button_map = {
                                     evdev.ecodes.BTN_LEFT: 1,
@@ -298,9 +307,25 @@ class MouseHandler:
                                         self.bthid_srv.handle_button_release(button)
                                     self.mouse_events += 1
                     except BlockingIOError:
+                        # Send any accumulated motion at end of batch
+                        if accumulated_x != 0 or accumulated_y != 0:
+                            final_x = max(MOUSE_MIN_MOTION, min(accumulated_x, MOUSE_MAX_MOTION))
+                            final_y = max(MOUSE_MIN_MOTION, min(accumulated_y, MOUSE_MAX_MOTION))
+                            self.bthid_srv.handle_mouse_motion(final_x, final_y)
+                            accumulated_x = 0
+                            accumulated_y = 0
+                            self.mouse_events += 1
                         continue  # No events available
                     except OSError as e:
                         if e.errno == 11:  # Resource temporarily unavailable
+                            # Send any accumulated motion before continuing
+                            if accumulated_x != 0 or accumulated_y != 0:
+                                final_x = max(MOUSE_MIN_MOTION, min(accumulated_x, MOUSE_MAX_MOTION))
+                                final_y = max(MOUSE_MIN_MOTION, min(accumulated_y, MOUSE_MAX_MOTION))
+                                self.bthid_srv.handle_mouse_motion(final_x, final_y)
+                                accumulated_x = 0
+                                accumulated_y = 0
+                                self.mouse_events += 1
                             continue
                         logger.error(f"Error reading from device {device.name}: {e}")
                         continue
