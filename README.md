@@ -49,12 +49,12 @@ Edit `main.py` and change the `CONTROLLER_MAC` variable in the beginning to your
        ```
        ### Editing /etc/systemd/system/bluetooth.service.d/override.conf
        ### Anything between here and the comment below will become the contents >
-       
+
        [Service]
        ExecStart=
        ExecStart=/usr/lib/bluetooth/bluetoothd -P input
        ```
-    
+
     - Finally restart the modified bluetoothd
        ```
        sudo systemctl restart bluetooth

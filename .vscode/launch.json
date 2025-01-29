@@ -13,5 +13,17 @@
                 "LOGLEVEL": "DEBUG"
             }
         },
+        {
+            "name": "Python: test_mouse.py (sudo)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_mouse.py",
+            "sudo": true,
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "LOGLEVEL": "DEBUG"
+            }
+        },
     ]
 }
